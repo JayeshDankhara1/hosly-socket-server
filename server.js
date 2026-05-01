@@ -4,43 +4,47 @@ const http = require("http");
 const mysql = require('mysql2/promise');
 
 /**
- * 🛠️ Hosly Socket Server - Production Optimized (v2)
+ * 🚀 Hosly Socket Server - Full Feature v2 (Safe Mode)
+ * Includes: History, Receipts, Online Status, and Guest Support.
  */
 
-// 1. Environment & Port
 const PORT = process.env.PORT || 3000;
 const ALLOWED_ORIGINS = (process.env.SOCKET_ALLOWED_ORIGINS || '').split(',').filter(Boolean);
 
-// 2. Database Connection Pool
-const pool = mysql.createPool({
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USERNAME,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_DATABASE,
-    port: process.env.DB_PORT || 3306,
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
-});
+// 1. Database Connection (Safe Mode)
+let pool = null;
+const isDbConfigured = process.env.DB_DATABASE && process.env.DB_DATABASE !== '***********';
 
-// Helper: Query Database
-const query = async (sql, params) => {
-    try {
-        const [results] = await pool.execute(sql, params);
-        return results;
-    } catch (err) {
-        console.error('❌ Database Error:', err.message);
-        throw err;
-    }
-};
+if (isDbConfigured) {
+    pool = mysql.createPool({
+        host: process.env.DB_HOST || 'localhost',
+        user: process.env.DB_USERNAME,
+        password: process.env.DB_PASSWORD,
+        database: process.env.DB_DATABASE,
+        port: process.env.DB_PORT || 3306,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0
+    });
 
-// 3. Health Check Server (Hostinger Friendly)
+    pool.getConnection()
+        .then(conn => {
+            console.log("✅ Database Connected successfully!");
+            conn.release();
+        })
+        .catch(err => {
+            console.warn("⚠️ Database Connection Failed, running in REAL-TIME ONLY mode:", err.message);
+            pool = null; // Disable DB features but keep server alive
+        });
+}
+
+// 2. Health Check Server
 const httpServer = http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("Hosly Socket Backend is Active\n");
+    res.end("Hosly Socket Backend is Active (Full Mode)\n");
 });
 
-// 4. Socket.io Setup
+// 3. Socket.io Setup
 const io = new Server(httpServer, {
     cors: {
         origin: ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : "*",
@@ -48,7 +52,7 @@ const io = new Server(httpServer, {
     }
 });
 
-// 5. State Management
+// 4. State Management
 // onlineUsers Map: identifier (UserId or GuestId) -> Set of Socket IDs
 const onlineUsers = new Map();
 
@@ -65,39 +69,115 @@ io.on("connection", (socket) => {
         socket.trackingId = identifier;
         socket.isGuest = !!data.guestId;
 
-        // Add to online map
         if (!onlineUsers.has(identifier)) {
             onlineUsers.set(identifier, new Set());
         }
         onlineUsers.get(identifier).add(socket.id);
         
-        // Broadcast unified list to everyone
         io.emit("online_users", Array.from(onlineUsers.keys()));
         io.emit("user_status_changed", { userId: identifier, status: 'online' });
 
         console.log(`✅ ${socket.isGuest ? 'Guest' : 'User'} ${identifier} Online`);
 
-        // Auto-join existing chat rooms
-        try {
-            let chats = [];
-            if (socket.isGuest) {
-                chats = await query('SELECT id FROM chats WHERE guest_id = ?', [identifier]);
-            } else {
-                chats = await query('SELECT chat_id as id FROM chat_users WHERE user_id = ?', [identifier]);
+        // Auto-join existing rooms (DB required)
+        if (pool) {
+            try {
+                const sql = socket.isGuest 
+                    ? 'SELECT id FROM chats WHERE guest_id = ?' 
+                    : 'SELECT chat_id as id FROM chat_users WHERE user_id = ?';
+                const [chats] = await pool.execute(sql, [identifier]);
+                chats.forEach(c => socket.join(`chat_${c.id}`));
+            } catch (e) {
+                console.error('Auto-join failed:', e.message);
             }
-            
-            chats.forEach(c => {
-                socket.join(`chat_${c.id}`);
+        }
+    });
+
+    /**
+     * Messaging Logic
+     */
+    socket.on("send_message", async (data) => {
+        if (!data.chatId) return;
+
+        const msgToBroadcast = {
+            ...data,
+            id: Date.now(),
+            created_at: new Date()
+        };
+
+        // Broadcast real-time
+        io.to(`chat_${data.chatId}`).emit("receive_message", msgToBroadcast);
+
+        // Save to DB
+        if (pool) {
+            try {
+                await pool.execute(
+                    'INSERT INTO messages (chat_id, user_id, guest_id, message, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())',
+                    [data.chatId, data.userId || null, data.guestId || null, data.message]
+                );
+                await pool.execute('UPDATE chats SET last_message_at = NOW() WHERE id = ?', [data.chatId]);
+            } catch (e) {
+                console.error('Failed to save message:', e.message);
+            }
+        }
+    });
+
+    /**
+     * History Fetching
+     */
+    socket.on("fetch_messages", async (data) => {
+        if (!pool || !data.chatId) return;
+        try {
+            const [messages] = await pool.execute(`
+                SELECT m.*, u.first_name, u.last_name, u.profile_picture 
+                FROM messages m 
+                LEFT JOIN users u ON m.user_id = u.id 
+                WHERE m.chat_id = ? 
+                ORDER BY m.created_at ASC`, [data.chatId]);
+            socket.emit("messages_loaded", { chatId: data.chatId, messages });
+        } catch (e) {
+            console.error('Fetch messages failed:', e.message);
+        }
+    });
+
+    /**
+     * Read Receipts
+     */
+    socket.on("mark_read", async (data) => {
+        if (!pool || !data.chatId) return;
+        try {
+            const identifier = data.userId || data.guestId;
+            await pool.execute(
+                'UPDATE messages SET read_at = NOW() WHERE chat_id = ? AND (user_id != ? OR guest_id != ?) AND read_at IS NULL',
+                [data.chatId, data.userId || 0, data.guestId || '']
+            );
+            io.to(`chat_${data.chatId}`).emit("messages_read", { 
+                chatId: data.chatId, 
+                read_at: new Date() 
             });
         } catch (e) {
-            console.error('Failed to auto-join rooms:', e.message);
+            console.error('Read receipt failed:', e.message);
         }
+    });
+
+    /**
+     * Indicators
+     */
+    socket.on("typing", (data) => {
+        if (data.chatId) socket.to(`chat_${data.chatId}`).emit("user_typing", data);
+    });
+
+    socket.on("stop_typing", (data) => {
+        if (data.chatId) socket.to(`chat_${data.chatId}`).emit("user_stop_typing", data);
     });
 
     socket.on("join_chat", (data) => {
         if (data.chatId) socket.join(`chat_${data.chatId}`);
     });
 
+    /**
+     * Disconnection
+     */
     socket.on("disconnect", () => {
         const identifier = socket.trackingId;
         if (identifier && onlineUsers.has(identifier)) {
@@ -111,22 +191,9 @@ io.on("connection", (socket) => {
             }
         }
     });
-
-    // Handle generic events (broadcast to rooms)
-    socket.on("send_message", (data) => {
-        if (data.chatId) io.to(`chat_${data.chatId}`).emit("receive_message", data);
-    });
-
-    socket.on("typing", (data) => {
-        if (data.chatId) socket.to(`chat_${data.chatId}`).emit("user_typing", data);
-    });
-
-    socket.on("stop_typing", (data) => {
-        if (data.chatId) socket.to(`chat_${data.chatId}`).emit("user_stop_typing", data);
-    });
 });
 
-// 6. Start Server
+// Start Server
 httpServer.listen(PORT, () => {
-    console.log(`🚀 Socket Server running on port ${PORT}`);
+    console.log(`🚀 Full Socket Server running on port ${PORT}`);
 });
