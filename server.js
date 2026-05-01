@@ -139,6 +139,7 @@ io.on("connection", (socket) => {
 
         let fullMessage = {
             id: Date.now(),
+            temp_id: data.tempId || data.temp_id || null, // Echo back tempId for frontend replacement
             chat_id: chatId,
             user_id: userId,
             guest_id: guestId,
@@ -189,8 +190,12 @@ io.on("connection", (socket) => {
         if (!pool || !chatId || !messageIds?.length) return;
 
         try {
-            const sql = 'UPDATE messages SET delivered_at = NOW() WHERE id IN (?) AND (user_id != ? OR guest_id != ?) AND delivered_at IS NULL';
-            await pool.query(sql, [messageIds, userId || 0, guestId || '']);
+            // Mark as delivered only if message is NOT from the current user/guest
+            const sql = userId 
+                ? 'UPDATE messages SET delivered_at = NOW() WHERE id IN (?) AND user_id != ? AND delivered_at IS NULL'
+                : 'UPDATE messages SET delivered_at = NOW() WHERE id IN (?) AND guest_id != ? AND delivered_at IS NULL';
+            
+            await pool.query(sql, [messageIds, userId || guestId]);
             
             io.to(`chat_${chatId}`).emit("message_delivered", { 
                 chat_id: chatId, 
@@ -212,12 +217,17 @@ io.on("connection", (socket) => {
 
         try {
             if (messageIds?.length) {
-                const sql = 'UPDATE messages SET read_at = NOW(), delivered_at = COALESCE(delivered_at, NOW()) WHERE id IN (?) AND (user_id != ? OR guest_id != ?)';
-                await pool.query(sql, [messageIds, userId || 0, guestId || '']);
+                // Specific messages
+                const sql = userId 
+                    ? 'UPDATE messages SET read_at = NOW(), delivered_at = COALESCE(delivered_at, NOW()) WHERE id IN (?) AND user_id != ?'
+                    : 'UPDATE messages SET read_at = NOW(), delivered_at = COALESCE(delivered_at, NOW()) WHERE id IN (?) AND guest_id != ?';
+                await pool.query(sql, [messageIds, userId || guestId]);
             } else {
                 // Bulk mark all as read for this chat
-                const sql = 'UPDATE messages SET read_at = NOW(), delivered_at = COALESCE(delivered_at, NOW()) WHERE chat_id = ? AND (user_id != ? OR guest_id != ?) AND read_at IS NULL';
-                await pool.query(sql, [chatId, userId || 0, guestId || '']);
+                const sql = userId
+                    ? 'UPDATE messages SET read_at = NOW(), delivered_at = COALESCE(delivered_at, NOW()) WHERE chat_id = ? AND user_id != ? AND read_at IS NULL'
+                    : 'UPDATE messages SET read_at = NOW(), delivered_at = COALESCE(delivered_at, NOW()) WHERE chat_id = ? AND guest_id != ? AND read_at IS NULL';
+                await pool.query(sql, [chatId, userId || guestId]);
             }
 
             io.to(`chat_${chatId}`).emit("messages_read", { 
