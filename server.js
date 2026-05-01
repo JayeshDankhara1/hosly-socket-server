@@ -5,8 +5,16 @@ const mysql = require('mysql2/promise');
 
 /**
  * 🚀 Hosly Socket Server - Production Optimized v2
- * Verified for Hostinger Deployment with Guest Support
  */
+
+// 0. Global Error Handling (To catch silent crashes)
+process.on('uncaughtException', (err) => {
+    console.error('🔥 CRITICAL: Uncaught Exception:', err.message);
+    console.error(err.stack);
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('🔥 CRITICAL: Unhandled Rejection at:', promise, 'reason:', reason);
+});
 
 // 1. Database Configuration (Safe Mode)
 let pool = null;
@@ -79,7 +87,10 @@ const query = async (sql, params) => {
 
 // 6. Socket Core logic
 io.on("connection", (socket) => {
-    console.log(`🔌 New Connection: ${socket.id}`);
+    console.log(`🔌 New Connection Attempt: ${socket.id} from ${socket.handshake.address}`);
+    
+    // Log headers to debug CORS
+    console.log(`🌐 Origin: ${socket.handshake.headers.origin}`);
 
     /**
      * User Connection & Status Tracking
