@@ -76,18 +76,23 @@ io.on("connection", (socket) => {
      * User Connection & Status Tracking
      */
     socket.on("user_connected", async (data) => {
-        const userId = Number(data.userId);
-        if (!userId) return;
+        const userId = data.userId ? Number(data.userId) : null;
+        const guestId = data.guestId || null;
         
+        if (!userId && !guestId) return;
+        
+        const trackingId = userId || guestId;
         socket.userId = userId;
-        if (!onlineUsers.has(userId)) {
-            onlineUsers.set(userId, new Set());
+        socket.guestId = guestId;
+
+        if (!onlineUsers.has(trackingId)) {
+            onlineUsers.set(trackingId, new Set());
         }
-        onlineUsers.get(userId).add(socket.id);
+        onlineUsers.get(trackingId).add(socket.id);
         
         // Notify everyone about online status
         io.emit("online_users", Array.from(onlineUsers.keys()));
-        console.log(`✅ User ${userId} Online [${onlineUsers.get(userId).size} sessions]`);
+        console.log(`✅ ${userId ? 'User ' + userId : 'Guest ' + guestId} Online [${onlineUsers.get(trackingId).size} sessions]`);
 
         // Auto-join existing chats for real-time notifications
         try {
@@ -306,13 +311,15 @@ io.on("connection", (socket) => {
      * Disconnection
      */
     socket.on("disconnect", () => {
-        if (socket.userId && onlineUsers.has(socket.userId)) {
-            const sessions = onlineUsers.get(socket.userId);
+        const trackingId = socket.userId || socket.guestId;
+        
+        if (trackingId && onlineUsers.has(trackingId)) {
+            const sessions = onlineUsers.get(trackingId);
             sessions.delete(socket.id);
             if (sessions.size === 0) {
-                onlineUsers.delete(socket.userId);
+                onlineUsers.delete(trackingId);
                 io.emit("online_users", Array.from(onlineUsers.keys()));
-                console.log(`👤 User ${socket.userId} Offline`);
+                console.log(`👤 ${socket.userId ? 'User ' + socket.userId : 'Guest ' + socket.guestId} Offline`);
             }
         }
         console.log(`🔌 Disconnected: ${socket.id}`);
