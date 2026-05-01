@@ -106,7 +106,12 @@ io.on("connection", (socket) => {
      */
     socket.on("send_message", async (data) => {
         const { chatId, userId, message, type = 'text' } = data;
-        if (!chatId || !userId || !message) return;
+        if (!chatId || !userId || !message) {
+            console.warn('⚠️ Invalid message data received:', data);
+            return;
+        }
+
+        console.log(`📩 Processing message from ${userId} for chat ${chatId}`);
 
         try {
             // Save to DB
@@ -114,6 +119,7 @@ io.on("connection", (socket) => {
                 'INSERT INTO messages (chat_id, user_id, message, type, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())',
                 [chatId, userId, message, type]
             );
+            console.log(`💾 Message saved to DB with ID: ${result.insertId}`);
 
             // Update chat timestamp
             await pool.execute('UPDATE chats SET last_message_at = NOW() WHERE id = ?', [chatId]);
@@ -134,9 +140,10 @@ io.on("connection", (socket) => {
             };
 
             // Broadcast to room
+            console.log(`📡 Broadcasting to room: chat_${chatId}`);
             io.to(`chat_${chatId}`).emit("receive_message", fullMessage);
         } catch (err) {
-            console.error('❌ Send Message Error:', err.message);
+            console.error('❌ Send Message Error Details:', err);
         }
     });
 
