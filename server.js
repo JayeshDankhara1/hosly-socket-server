@@ -48,7 +48,8 @@ const httpServer = http.createServer((req, res) => {
 // 3. Socket.io Setup
 const io = new Server(httpServer, {
     cors: {
-        origin: ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : "*",
+        // If ALLOWED_ORIGINS is empty, we reflect the incoming origin (needed for credentials: true)
+        origin: ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : true,
         methods: ["GET", "POST"],
         credentials: true
     },
