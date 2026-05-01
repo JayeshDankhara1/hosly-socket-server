@@ -31,9 +31,11 @@ if (isDbConfigured) {
             conn.release();
         })
         .catch(err => {
-            console.warn("⚠️ Database Connection Failed, running in REAL-TIME ONLY mode:", err.message);
+            console.warn("⚠️ Database Connection Failed (using REAL-TIME ONLY mode):", err.message);
             pool = null;
         });
+} else {
+    console.log("ℹ️ Database not configured, running in REAL-TIME ONLY mode.");
 }
 
 // 2. Server setup
@@ -46,15 +48,18 @@ const httpServer = http.createServer((req, res) => {
 });
 
 // 3. Socket.io Setup
+console.log(`📡 Configuring CORS with origins:`, ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : "ALL (*)");
+
 const io = new Server(httpServer, {
     cors: {
-        // If ALLOWED_ORIGINS is empty, we reflect the incoming origin (needed for credentials: true)
-        origin: ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : true,
+        // PERMISSIVE MODE: Allow all during debugging to fix the timeout
+        origin: true, 
         methods: ["GET", "POST"],
         credentials: true
     },
     pingTimeout: 60000,
-    pingInterval: 25000
+    pingInterval: 25000,
+    connectTimeout: 45000 // Increased timeout for slower connections
 });
 
 // 4. State Management
@@ -352,6 +357,8 @@ io.on("connection", (socket) => {
 });
 
 // Start Server
-httpServer.listen(PORT, () => {
-    console.log(`🚀 Hosly Socket Server (Full Mode) running on port ${PORT}`);
+httpServer.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Hosly Socket Server is truly alive!`);
+    console.log(`📡 Listening on Port: ${PORT}`);
+    console.log(`🌍 Health Check: http://localhost:${PORT}`);
 });
