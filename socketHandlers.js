@@ -131,8 +131,6 @@ const registerHandlers = (io, socket) => {
             try {
                 const userId = socket.verifiedUserId;
                 const guestId = socket.verifiedGuestId;
-                
-                console.log(`📖 Received mark_read from ${socket.id} (User: ${userId}, Guest: ${guestId}) for Chat: ${chatId}, Messages: ${JSON.stringify(messageIds)}`);
 
                 let query = 'UPDATE messages SET read_at = NOW(), delivered_at = COALESCE(delivered_at, NOW()) WHERE chat_id = ? AND read_at IS NULL';
                 let params = [chatId];
