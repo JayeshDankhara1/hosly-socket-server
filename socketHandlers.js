@@ -17,7 +17,7 @@ const registerHandlers = (io, socket) => {
      */
     const joinVerifiedRooms = async () => {
         const identifier = socket.trackingId;
-        const isGuest = !!socket.verifiedGuestId;
+        const isGuest = !!socket.verifiedGuestId && !socket.verifiedUserId;
 
         if (!identifier) return;
 
@@ -66,12 +66,12 @@ const registerHandlers = (io, socket) => {
             let isMember = false;
             const identifier = socket.trackingId;
 
-            if (socket.verifiedGuestId) {
-                const [chat] = await pool.execute('SELECT id FROM chats WHERE id = ? AND guest_id = ?', [chatId, identifier]);
-                if (chat.length > 0) isMember = true;
-            } else {
+            if (socket.verifiedUserId) {
                 const [membership] = await pool.execute('SELECT id FROM chat_users WHERE chat_id = ? AND user_id = ?', [chatId, identifier]);
                 if (membership.length > 0) isMember = true;
+            } else if (socket.verifiedGuestId) {
+                const [chat] = await pool.execute('SELECT id FROM chats WHERE id = ? AND guest_id = ?', [chatId, identifier]);
+                if (chat.length > 0) isMember = true;
             }
 
             if (!isMember) {
@@ -129,11 +129,19 @@ const registerHandlers = (io, socket) => {
 
         if (chatId) {
             try {
-                const userId = data.userId || data.user_id;
-                const guestId = data.guestId || data.guest_id;
+                const userId = socket.verifiedUserId;
+                const guestId = socket.verifiedGuestId;
+                
+                console.log(`📖 Received mark_read from ${socket.id} (User: ${userId}, Guest: ${guestId}) for Chat: ${chatId}, Messages: ${JSON.stringify(messageIds)}`);
 
                 let query = 'UPDATE messages SET read_at = NOW(), delivered_at = COALESCE(delivered_at, NOW()) WHERE chat_id = ? AND read_at IS NULL';
                 let params = [chatId];
+
+                // CRITICAL: Only mark as read if we HAVE a verified identity
+                if (!userId && !guestId) {
+                    console.warn(`⚠️ mark_read rejected: Unverified socket ${socket.id}`);
+                    return;
+                }
 
                 // Don't mark our own messages as read
                 if (userId) {
@@ -166,11 +174,12 @@ const registerHandlers = (io, socket) => {
     socket.on("mark_delivered", async (data) => {
         const chatId = data.chatId || data.chat_id;
         const messageIds = data.messageIds || [];
-        const userId = data.userId || data.user_id;
-        const guestId = data.guestId || data.guest_id;
 
         if (chatId && messageIds.length > 0) {
             try {
+                const userId = socket.verifiedUserId;
+                const guestId = socket.verifiedGuestId;
+
                 const placeholders = messageIds.map(() => '?').join(',');
                 let query = `UPDATE messages SET delivered_at = NOW() WHERE id IN (${placeholders}) AND delivered_at IS NULL`;
                 let params = [...messageIds];
@@ -197,6 +206,7 @@ const registerHandlers = (io, socket) => {
             }
         }
     });
+
 
     /**
      * 4. Chat Management (Clear, Delete)
@@ -241,22 +251,27 @@ const registerHandlers = (io, socket) => {
      * 5. Interaction (Typing, Joining)
      */
     socket.on("typing", (data) => {
-        if (data.chatId) {
-            socket.to(`chat_${data.chatId}`).emit("user_typing", { 
-                chatId: data.chatId, 
-                userId: socket.trackingId 
+        const chatId = data.chatId || data.chat_id;
+        if (chatId) {
+            // console.log(`⌨️ User ${socket.trackingId} is typing in chat_${chatId}`);
+            socket.to(`chat_${chatId}`).emit("user_typing", { 
+                chatId, 
+                userId: socket.trackingId,
+                userName: data.userName || 'Someone'
             });
         }
     });
 
     socket.on("stop_typing", (data) => {
-        if (data.chatId) {
-            socket.to(`chat_${data.chatId}`).emit("user_stop_typing", { 
-                chatId: data.chatId, 
+        const chatId = data.chatId || data.chat_id;
+        if (chatId) {
+            socket.to(`chat_${chatId}`).emit("user_stop_typing", { 
+                chatId, 
                 userId: socket.trackingId 
             });
         }
     });
+
 
     socket.on("join_chat", async (data) => {
         const chatId = data.chatId || data.chat_id;
@@ -265,12 +280,12 @@ const registerHandlers = (io, socket) => {
         if (chatId && identifier) {
             try {
                 let isMember = false;
-                if (socket.verifiedGuestId) {
-                    const [chat] = await pool.execute('SELECT id FROM chats WHERE id = ? AND guest_id = ?', [chatId, identifier]);
-                    if (chat.length > 0) isMember = true;
-                } else {
+                if (socket.verifiedUserId) {
                     const [membership] = await pool.execute('SELECT id FROM chat_users WHERE chat_id = ? AND user_id = ?', [chatId, identifier]);
                     if (membership.length > 0) isMember = true;
+                } else if (socket.verifiedGuestId) {
+                    const [chat] = await pool.execute('SELECT id FROM chats WHERE id = ? AND guest_id = ?', [chatId, identifier]);
+                    if (chat.length > 0) isMember = true;
                 }
 
                 if (isMember) {

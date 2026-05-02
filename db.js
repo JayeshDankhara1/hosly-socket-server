@@ -68,7 +68,22 @@ async function initializeDatabase() {
             )
         `);
 
+        // 4. Performance Indexes
+        try {
+            await connection.query('CREATE INDEX idx_chat_last_msg ON chats(last_message_at)');
+            await connection.query('CREATE INDEX idx_chat_guest ON chats(guest_id)');
+            await connection.query('CREATE INDEX idx_msg_chat_read ON messages(chat_id, read_at)');
+            await connection.query('CREATE INDEX idx_cu_composite ON chat_users(chat_id, user_id)');
+            console.log("✅ High-performance indexes verified");
+        } catch (idxErr) {
+            // Silence "Duplicate key name" errors
+            if (idxErr.code !== 'ER_DUP_KEYNAME') {
+                console.warn("⚠️ Index warning:", idxErr.message);
+            }
+        }
+
         console.log("✅ MySQL tables initialized successfully");
+
     } catch (err) {
         if (err.code === 'ER_BAD_DB_ERROR') {
             console.error(`❌ Database '${process.env.DB_DATABASE}' does not exist.`);
