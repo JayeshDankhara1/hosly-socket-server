@@ -5,7 +5,7 @@ const { initializeDatabase } = require('./db');
 const { registerHandlers } = require('./socketHandlers');
 
 /**
- * 🚀 Hosly Socket Server - Modular Version
+ * 🚀 Hosly Socket Server - Modular Production Version
  */
 
 // 0. Global Error Handling
@@ -52,18 +52,35 @@ const io = new Server(httpServer, {
 });
 
 // 4. Security Middleware (Authentication)
+const jwt = require('jsonwebtoken');
+
 io.use((socket, next) => {
-    // TIP: In production, pass a token from the frontend and verify it here.
-    // const token = socket.handshake.auth.token;
-    // if (!token && process.env.APP_ENV === 'production') return next(new Error('Authentication error'));
+    const token = socket.handshake.auth.token || socket.handshake.query.token;
     
-    // For now, we trust the handshake data but log it
-    console.log(`🔒 Handshake: ${socket.id} from ${socket.handshake.headers.origin}`);
-    next();
+    if (!token) {
+        console.warn(`🔒 Handshake Rejected: No token from ${socket.id}`);
+        return next(new Error('Authentication error: No token provided'));
+    }
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+        if (err) {
+            console.error(`🔒 Handshake Rejected: ${err.message} for ${socket.id}`);
+            // console.debug('Token attempted:', token); // Careful with logging tokens
+            return next(new Error(`Authentication error: ${err.message}`));
+        }
+
+        
+        // Store the verified data on the socket
+        socket.verifiedUserId = decoded.user_id;
+        socket.verifiedGuestId = decoded.guest_id;
+        socket.trackingId = String(decoded.user_id || decoded.guest_id);
+        
+        console.log(`🔒 Handshake Verified: ${socket.trackingId} (${socket.id})`);
+        next();
+    });
 });
 
 // 5. Register Handlers
-
 io.on("connection", (socket) => {
     registerHandlers(io, socket);
 });

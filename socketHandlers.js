@@ -12,25 +12,26 @@ const registerHandlers = (io, socket) => {
     /**
      * 1. User Connected / Handshake
      */
-    socket.on("user_connected", async (data) => {
-        const identifier = String(data.userId || data.guestId);
-        if (!identifier || identifier === "null" || identifier === "undefined") return;
+    /**
+     * 1. Auto-Join Rooms (On Connection)
+     */
+    const joinVerifiedRooms = async () => {
+        const identifier = socket.trackingId;
+        const isGuest = !!socket.verifiedGuestId;
 
-        socket.trackingId = identifier;
-        socket.userId = data.userId;
-        socket.guestId = data.guestId;
+        if (!identifier) return;
 
+        // Manage online status
         if (!onlineUsers.has(identifier)) onlineUsers.set(identifier, new Set());
         onlineUsers.get(identifier).add(socket.id);
         
         io.emit("online_users", Array.from(onlineUsers.keys()));
         io.emit("user_status_changed", { userId: identifier, status: 'online' });
-        console.log(`✅ ${socket.guestId ? 'Guest' : 'User'} ${identifier} is Online`);
+        console.log(`✅ ${isGuest ? 'Guest' : 'User'} ${identifier} joined`);
 
-        // Auto-join rooms
         try {
             let chatIds = [];
-            if (socket.guestId) {
+            if (isGuest) {
                 const [rows] = await pool.execute('SELECT id FROM chats WHERE guest_id = ?', [identifier]);
                 chatIds = rows.map(r => r.id);
             } else {
@@ -43,9 +44,12 @@ const registerHandlers = (io, socket) => {
                 console.log(`🏠 ${identifier} joined room: chat_${id}`);
             });
         } catch (e) { 
-            console.error('❌ Join Error:', e.message); 
+            console.error('❌ Auto-Join Error:', e.message); 
         }
-    });
+    };
+
+    // Execute auto-join immediately since we are already verified
+    joinVerifiedRooms();
 
     /**
      * 2. Messaging
@@ -62,7 +66,7 @@ const registerHandlers = (io, socket) => {
             let isMember = false;
             const identifier = socket.trackingId;
 
-            if (socket.guestId) {
+            if (socket.verifiedGuestId) {
                 const [chat] = await pool.execute('SELECT id FROM chats WHERE id = ? AND guest_id = ?', [chatId, identifier]);
                 if (chat.length > 0) isMember = true;
             } else {
@@ -82,8 +86,8 @@ const registerHandlers = (io, socket) => {
                 'INSERT INTO messages (chat_id, user_id, guest_id, message, type, file_path, file_name) VALUES (?, ?, ?, ?, ?, ?, ?)',
                 [
                     chatId, 
-                    data.userId || null, 
-                    data.guestId || null, 
+                    socket.verifiedUserId || null, 
+                    socket.verifiedGuestId || null, 
                     data.message, 
                     data.type || 'text',
                     data.file_path || null,
@@ -97,8 +101,8 @@ const registerHandlers = (io, socket) => {
                     ...data,
                     id: messageId,
                     chat_id: chatId,
-                    user_id: data.userId || data.user_id || null,
-                    guest_id: data.guestId || data.guest_id || null,
+                    user_id: socket.verifiedUserId || null,
+                    guest_id: socket.verifiedGuestId || null,
                     created_at: new Date()
                 };
 
@@ -261,7 +265,7 @@ const registerHandlers = (io, socket) => {
         if (chatId && identifier) {
             try {
                 let isMember = false;
-                if (socket.guestId) {
+                if (socket.verifiedGuestId) {
                     const [chat] = await pool.execute('SELECT id FROM chats WHERE id = ? AND guest_id = ?', [chatId, identifier]);
                     if (chat.length > 0) isMember = true;
                 } else {
